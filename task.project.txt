@@ -1,0 +1,413 @@
+const http = require('http');
+const url = require('url');
+const fs = require('fs');
+const path = require('path');
+const { Pool } = require('pg');
+
+// PostgreSQL connection pool
+const pool = new Pool({
+    user: 'postgres', // Replace with your PostgreSQL username
+    host: 'localhost', // Replace with your PostgreSQL host (e.g., localhost)
+    database: 'projectdb', // Your database name
+    password: 'postgres', // Replace with your PostgreSQL password
+    port: 5432, // Default PostgreSQL port
+});
+
+const server = http.createServer(async (req, res) => {
+    const parsedUrl = url.parse(req.url, true);
+    const pathname = parsedUrl.pathname;
+    const method = req.method;
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+    }
+
+    if (pathname === '/') {
+        fs.readFile(path.join(__dirname, 'index.html'), (err, data) => {
+            if (err) {
+                res.writeHead(500);
+                res.end('Internal Server Error');
+            } else {
+                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.end(data);
+            }
+        });
+    } else if (pathname === '/style.css') {
+        fs.readFile(path.join(__dirname, 'style.css'), (err, data) => {
+            if (err) {
+                res.writeHead(500);
+                res.end('Internal Server Error');
+            } else {
+                res.writeHead(200, { 'Content-Type': 'text/css' });
+                res.end(data);
+            }
+        });
+    } else if (pathname === '/script.js') {
+        fs.readFile(path.join(__dirname, 'script.js'), (err, data) => {
+            if (err) {
+                res.writeHead(500);
+                res.end('Internal Server Error');
+            } else {
+                res.writeHead(200, { 'Content-Type': 'application/javascript' });
+                res.end(data);
+            }2
+        });
+    } else if (pathname === '/tasks') {
+        if (method === 'GET') {
+            try {
+                const client = await pool.connect();
+                const result = await client.query('SELECT * FROM protable');
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.rows));
+                client.release();
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end(err.message);
+            }
+        } else if (method === 'POST') {
+            let body = '';
+            req.on('data', (chunk) => {
+                body += chunk.toString();
+            });
+            req.on('end', async () => {
+                try {
+                    const newTask = JSON.parse(body);
+                    const client = await pool.connect();
+                    const result = await client.query('INSERT INTO protable (task) VALUES ($1) RETURNING *', [newTask.task]);
+                    res.writeHead(201, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result.rows[0]));
+                    client.release();
+                } catch (error) {
+                    res.writeHead(400, { 'Content-Type': 'text/plain' });
+                    res.end('Invalid JSON');
+                }
+            });
+        } else {
+            res.writeHead(405, { 'Content-Type': 'text/plain' });
+            res.end('Method Not Allowed');
+        }
+    } else if (pathname.startsWith('/tasks/')) {
+        const id = parseInt(pathname.split('/')[2]);
+        if (isNaN(id)) {
+            res.writeHead(400, { 'Content-Type': 'text/plain' });
+            res.end('Invalid Task ID');
+            return;
+        }
+
+        if (method === 'PUT') {
+            let body = '';
+            req.on('data', (chunk) => {
+                body += chunk.toString();
+            });
+            req.on('end', async () => {
+                try {
+                    const updatedTask = JSON.parse(body);
+                    const client = await pool.connect();
+                    const result = await client.query('UPDATE protable SET task = $1, completed = $2 WHERE id = $3 RETURNING *', [updatedTask.task, updatedTask.completed, id]);
+                    if (result.rowCount === 0) {
+                        res.writeHead(404, { 'Content-Type': 'text/plain' });
+                        res.end('Task not found');
+                        client.release();
+                        return;
+                    }
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result.rows[0]));
+                    client.release();
+                } catch (error) {
+                    res.writeHead(400, { 'Content-Type': 'text/plain' });
+                    res.end('Invalid JSON');
+                }
+            });
+        } else if (method === 'DELETE') {
+            try {
+                const client = await pool.connect();
+                await client.query('DELETE FROM protable WHERE id = $1', [id]);
+                res.writeHead(204);
+                res.end();
+                client.release();
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end(err.message);
+            }
+        } else {
+            res.writeHead(405, { 'Content-Type': 'text/plain' });
+            res.end('Method Not Allowed');
+        }
+    } else {
+        res.writeHead(404);
+        res.end('Not Found');
+    }
+});
+
+const PORT = 3000;
+server.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+});
+
+----------------------------------------------------------------------------------------------------------
+HTML //-
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task List</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="task-list">
+        <input type="text" placeholder="Search tasks" id="searchTask">
+        <div>
+            <button id="allTasks">All</button>
+            <button id="uncompletedTasks" class="active">Uncompleted</button>
+            <button id="completedTasks">Completed</button>
+        </div>
+        <ul id="taskList"></ul>
+        <button class="add-task" id="addTaskButton">+ Add Task</button>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html> 
+
+
+
+-------------------------------------------------------------------------------------------
+
+css //---
+
+
+body {
+    font-family: sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    margin: 0;
+    background-color: #f0f0f0;
+}
+
+.task-list {
+    background-color: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    width: 300px;
+    display: flex;
+    flex-direction: column; /* Arrange elements vertically */
+    max-height: 80vh; /* Limit the maximum height */
+}
+
+.task-list input[type="text"] {
+    width: calc(100% - 20px); /* Adjust width for padding */
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-bottom: 10px;
+}
+
+.task-list > div { /* Container for filter buttons */
+    margin-bottom: 10px;
+    display: flex; /* Arrange buttons in a row */
+    gap: 5px; /* Add some space between buttons */
+}
+
+.task-list button {
+    padding: 8px 12px;
+    border: none;
+    background-color: #e0e0e0;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.task-list button.active {
+    background-color: #d0d0d0;
+}
+
+.task-list ul {
+    list-style: none;
+    padding: 0;
+    margin: 10px 0;
+    overflow-y: auto; /* Enable vertical scrolling */
+    flex-grow: 1; /* Allow the ul to take up remaining vertical space */
+}
+
+.task-list li {
+    display: flex;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.task-list li:last-child {
+    border-bottom: none;
+}
+
+.task-list li input[type="checkbox"] {
+    margin-right: 10px;
+}
+
+.task-list li button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    margin-left: auto;
+    padding: 0;
+    font-size: 1.2em;
+}
+
+.task-list li span {
+    flex-grow: 1;
+}
+
+.task-list .add-task {
+    width: 100%;
+    padding: 10px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 10px;
+}
+
+----------------------------------------------------------------------------------------------------
+
+script //---
+
+let tasks = [];
+let filter = 'uncompleted';
+
+function renderTasks() {
+    const taskList = document.getElementById('taskList');
+    taskList.innerHTML = '';
+    const searchInput = document.getElementById('searchTask').value.toLowerCase();
+
+    const filteredTasks = tasks.filter(task => {
+        if (filter === 'completed' && !task.completed) return false;
+        if (filter === 'uncompleted' && task.completed) return false;
+        if (!task.task.toLowerCase().includes(searchInput)) return false;
+        return true;
+    });
+
+    filteredTasks.forEach(task => {
+        const li = document.createElement('li');
+        let actions = '';
+        if (!task.completed) {
+            actions = `
+                <button onclick="editTask(${task.id})">✏️</button>
+            `;
+        }
+        li.innerHTML = `
+            <input type="checkbox" ${task.completed ? 'checked' : ''} onchange="toggleComplete(${task.id})">
+            <span>${task.task}</span>
+            ${actions}
+            <button onclick="deleteTask(${task.id})">🗑️</button>
+        `;
+        taskList.appendChild(li);
+    });
+}
+
+function fetchTasks() {
+    fetch('/tasks')
+        .then(response => response.json())
+        .then(data => {
+            tasks = data;
+            renderTasks();
+        });
+}
+
+function addTask(taskText) {
+    fetch('/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: taskText })
+    })
+    .then(response => response.json())
+    .then(newTask => {
+        tasks.push(newTask);
+        renderTasks();
+    });
+}
+
+function deleteTask(taskId) {
+    fetch(`/tasks/${taskId}`, { method: 'DELETE' })
+        .then(() => {
+            tasks = tasks.filter(task => task.id !== taskId);
+            renderTasks();
+        });
+}
+
+function toggleComplete(taskId) {
+    const task = tasks.find(task => task.id === taskId);
+    fetch(`/tasks/${taskId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...task, completed: !task.completed })
+    })
+    .then(response => response.json())
+    .then(updatedTask => {
+        tasks = tasks.map(t => t.id === updatedTask.id ? updatedTask : t);
+        renderTasks();
+    });
+}
+
+function editTask(taskId) {
+    const task = tasks.find(task => task.id === taskId);
+    const newTaskText = prompt('Edit task:', task.task);
+    if (newTaskText) {
+        fetch(`/tasks/${taskId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...task, task: newTaskText })
+        })
+        .then(response => response.json())
+        .then(updatedTask => {
+            tasks = tasks.map(t => t.id === updatedTask.id ? updatedTask : t);
+            renderTasks();
+        });
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    fetchTasks();
+
+    document.getElementById('addTaskButton').addEventListener('click', () => {
+        const taskText = prompt('Enter task:');
+        if (taskText) {
+            addTask(taskText);
+        }
+    });
+
+    document.getElementById('allTasks').addEventListener('click', () => {
+        filter = 'all';
+        document.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
+        document.getElementById('allTasks').classList.add('active');
+        renderTasks();
+    });
+
+    document.getElementById('uncompletedTasks').addEventListener('click', () => {
+        filter = 'uncompleted';
+        document.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
+        document.getElementById('uncompletedTasks').classList.add('active');
+        renderTasks();
+    });
+
+    document.getElementById('completedTasks').addEventListener('click', () => {
+        filter = 'completed';
+        document.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
+        document.getElementById('completedTasks').classList.add('active');
+        renderTasks();
+    });
+
+    document.getElementById('searchTask').addEventListener('input', renderTasks);
+});
+
+----------------------------------------------------------------------------------------------------------
